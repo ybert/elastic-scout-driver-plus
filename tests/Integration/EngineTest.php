@@ -2,21 +2,25 @@
 
 namespace Elastic\ScoutDriverPlus\Tests\Integration;
 
+use Elastic\ScoutDriverPlus\Builders\SearchParametersBuilder;
 use Elastic\ScoutDriverPlus\Engine;
 use Elastic\ScoutDriverPlus\Factories\DocumentFactory;
 use Elastic\ScoutDriverPlus\Factories\RoutingFactory;
 use Elastic\ScoutDriverPlus\Jobs\RemoveFromSearch;
 use Elastic\ScoutDriverPlus\Searchable;
+use Elastic\ScoutDriverPlus\Tests\App\Author;
 use Elastic\ScoutDriverPlus\Tests\App\Book;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\Attributes\UsesClass;
+use stdClass;
 
 #[CoversClass(Engine::class)]
 #[CoversClass(RemoveFromSearch::class)]
 #[UsesClass(DocumentFactory::class)]
 #[UsesClass(RoutingFactory::class)]
 #[UsesClass(Searchable::class)]
+#[UsesClass(SearchParametersBuilder::class)]
 final class EngineTest extends TestCase
 {
     public function test_models_can_be_found_using_default_search(): void
@@ -86,5 +90,48 @@ final class EngineTest extends TestCase
         $this->assertDatabaseQueriesCount(2, static function () {
             Book::makeAllSearchable();
         });
+    }
+
+    public function test_many_searches_can_be_performed_with_parameters(): void
+    {
+        $book = factory(Book::class)->state('belongs_to_author')->create();
+        $author = $book->author;
+
+        $bookSearchParameters = (new SearchParametersBuilder($book))
+            ->query(['match_all' => new stdClass()])
+            ->buildSearchParameters();
+
+        $authorSearchParameters = (new SearchParametersBuilder($author))
+            ->query(['match_all' => new stdClass()])
+            ->buildSearchParameters();
+
+        /** @var Engine $engine */
+        $engine = $book->searchableUsing();
+        $results = $engine->searchManyWithParameters([$bookSearchParameters, $authorSearchParameters]);
+
+        $this->assertCount(2, $results);
+        $this->assertSame(1, $results->get(0)->total());
+        $this->assertSame(1, $results->get(1)->total());
+    }
+
+    public function test_connection_name_is_null_by_default(): void
+    {
+        /** @var Engine $engine */
+        $engine = (new Book())->searchableUsing();
+
+        $this->assertNull($engine->connectionName());
+    }
+
+    public function test_connection_name_reflects_the_value_passed_to_connection(): void
+    {
+        $this->config->set(
+            'elastic.client.connections.secondary',
+            $this->config->get('elastic.client.connections.default')
+        );
+
+        /** @var Engine $engine */
+        $engine = (new Book())->searchableUsing();
+
+        $this->assertSame('secondary', $engine->connection('secondary')->connectionName());
     }
 }
